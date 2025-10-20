@@ -1,0 +1,22 @@
+# Python / venv
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+
+# ぜったい公開しない
+.env
+*.key
+*.pem
+
+# 生成物 / ログ / DB
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# 画像キャッシュなど必要に応じて
+*.png
