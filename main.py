@@ -13,7 +13,6 @@ import discord
 from discord import app_commands
 
 from bot.config import TOKEN, DEV_GUILD_ID
-# main.py の先頭付近の import に追加
 from bot.db import init_db, close_open_sessions_at_startup
 from bot.utils import now_utc
 from bot.commands import setup_all

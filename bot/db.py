@@ -47,6 +47,23 @@ def init_db():
         """)
         con.execute("CREATE INDEX IF NOT EXISTS idx_progress_user_day ON daily_progress(user_id, guild_id, day_start_ts);")
 
+        con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS events(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            guild_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            start_ts INTEGER NOT NULL,
+            end_ts INTEGER NOT NULL,
+            is_online INTEGER NOT NULL DEFAULT 0,
+            place TEXT
+        );
+        """)
+        con.execute("CREATE INDEX IF NOT EXISTS idx_events_guild_start ON events(guild_id, start_ts);")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_events_user_start ON events(user_id, start_ts);")
+
+
 # bot/db.py に追記
 def close_open_sessions_at_startup(close_ts: int):
     """
