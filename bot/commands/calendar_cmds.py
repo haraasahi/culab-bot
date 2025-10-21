@@ -9,7 +9,11 @@ from typing import Optional, Iterable
 import discord
 from discord import app_commands
 
-from ..db import get_db  # 既存の SQLite 接続ユーティリティ
+try:
+    from ..db import get_db
+except ImportError:
+    from ..db import get_conn as get_db
+    
 # タイムゾーン（既存に合わせてJST）
 JST = ZoneInfo("Asia/Tokyo")
 
