@@ -217,8 +217,8 @@ class GradeSelect(discord.ui.Select):
 
 class NameModal(discord.ui.Modal, title="名前の入力（日本語OK）"):
     name = discord.ui.TextInput(
-        label="あなたの名前（例：あさひ7）",
-        placeholder="氏名または通称を入力（後で変更可）",
+        label="あなたの名前（ひらがな、またはローマ字で登録ください)",
+        placeholder="名前または通称を入力（後で変更不可）",
         required=True,
         max_length=32,
     )
