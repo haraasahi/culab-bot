@@ -22,8 +22,8 @@ from bot.utils import now_utc
 
 # ------- Discord Client -------
 intents = discord.Intents.default()
-# 「作業終了のあとに続けて打ったメッセージ」を拾うために必要
 intents.message_content = True
+intents.members = True 
 
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)

@@ -18,3 +18,10 @@ USER_REPORT_CHANNELS = {
 }
 
 WORK_TYPES = ["研究", "勉強", "資料作成", "その他"]
+
+GRADE_ROLES = ["B3", "B4", "M1", "M2", "D"]
+
+# ウェルカム用チャンネル名（無ければ自動作成）
+WELCOME_CHANNEL_NAME = "welcome"
+
+REGISTERED_ROLE_NAME = "culab"
