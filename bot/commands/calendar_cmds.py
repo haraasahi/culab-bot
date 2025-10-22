@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import calendar
+import re
 from zoneinfo import ZoneInfo
 from typing import Optional, Dict, List, Tuple
 
@@ -19,7 +20,6 @@ except ImportError:
 JST = ZoneInfo("Asia/Tokyo")
 
 # --- 学年グループ定義 ---
-# 役職ロール名 → 学年キー（DB保存用）。M1/M2は"M"に統合
 ROLE_TO_GRADE = {
     "b3": "B3",
     "b4": "B4",
@@ -54,13 +54,11 @@ def _ensure_tables():
         """
     )
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cal_guild_grade_date ON calendar_events(guild_id, grade, date);")
-    # 1日前リマインド済みフラグ（存在しなければ追加）
     try:
         cur.execute("ALTER TABLE calendar_events ADD COLUMN remind1d_sent INTEGER NOT NULL DEFAULT 0;")
     except Exception:
         pass
     con.commit()
-
 
 # ---------- ユーティリティ ----------
 def _now_tz() -> dt.datetime:
@@ -71,6 +69,19 @@ def _parse_date(date_str: str) -> dt.date:
 
 def _parse_time(hhmm: str) -> dt.time:
     return dt.datetime.strptime(hhmm, "%H:%M").time()
+
+def _parse_time_range(s: str) -> tuple[dt.time, dt.time]:
+    """
+    'HH:MM-HH:MM' / 'HH:MM – HH:MM' / 'HH:MM～HH:MM' などを許容して開始・終了を返す
+    """
+    s = (s or "").strip()
+    # 許容される区切り：-, –, —, 〜, ～, to
+    m = re.split(r"\s*(?:-|–|—|〜|～|to)\s*", s, maxsplit=1, flags=re.IGNORECASE)
+    if len(m) != 2:
+        raise ValueError("time range format")
+    start = _parse_time(m[0])
+    end = _parse_time(m[1])
+    return start, end
 
 def _fmt_time(t: dt.time) -> str:
     return t.strftime("%H:%M")
@@ -100,7 +111,6 @@ def _user_grade(member: discord.Member) -> Optional[str]:
     return None
 
 def _can_write_grade(member: discord.Member, target_grade: str) -> bool:
-    """新規登録の権限判定。ALLは管理権限のみ。"""
     if member.guild_permissions.manage_guild or member.guild_permissions.administrator:
         return True
     if target_grade == "ALL":
@@ -109,7 +119,6 @@ def _can_write_grade(member: discord.Member, target_grade: str) -> bool:
     return my_grade == target_grade
 
 def _can_manage_event(member: discord.Member, ev_grade: str) -> bool:
-    """編集/削除の許可。'ALL' は管理権限のみ、それ以外は学年一致 or 管理権限。"""
     if member.guild_permissions.manage_guild or member.guild_permissions.administrator:
         return True
     if ev_grade == "ALL":
@@ -117,7 +126,6 @@ def _can_manage_event(member: discord.Member, ev_grade: str) -> bool:
     return _user_grade(member) == ev_grade
 
 def _normalize_grade_input(s: str | None, member: discord.Member) -> Optional[str]:
-    """テキスト入力から学年キーを正規化。空欄→自分の学年。"""
     if not s:
         return _user_grade(member)
     raw = s.strip().lower()
@@ -128,7 +136,6 @@ def _normalize_grade_input(s: str | None, member: discord.Member) -> Optional[st
     if raw in ("researcher", "res", "r"): return "researcher"
     if raw in ("all", "＊", "全", "全学年"): return "ALL"
     return None
-
 
 # ---------- 埋め込み生成 ----------
 def _embed_event_list(
@@ -156,10 +163,8 @@ def _embed_event_list(
         embed.set_footer(text="注: 「【全学年】」は全学年向けに登録された予定です。")
     return embed
 
-
 # ---------- 管理用ビュー ----------
 class _EventSelect(discord.ui.Select):
-    """予定を1件選ぶセレクト（選択時は無言ACK＋選択状態を保持）"""
     def __init__(self, options: List[discord.SelectOption]):
         super().__init__(
             placeholder="編集/削除する予定を選んでください（最大25件）",
@@ -167,7 +172,6 @@ class _EventSelect(discord.ui.Select):
             max_values=1,
             options=options
         )
-
     async def callback(self, inter: discord.Interaction):
         chosen = self.values[0] if self.values else None
         if chosen:
@@ -184,22 +188,15 @@ class _EventSelect(discord.ui.Select):
             except Exception:
                 pass
 
-
 class _ManagePanel(discord.ui.View):
-    """
-    押したユーザーにだけ見える管理パネル（セレクト＋編集/削除＋新規登録）。
-    リストが空でも「➕ 新規登録」は使える。
-    """
     def __init__(self, items: List[Tuple[int, dict]], *, timeout: int = 600):
         super().__init__(timeout=timeout)
         self._has_select = False
-
         options: List[discord.SelectOption] = []
-        for ev_id, ev in items[:25]:  # Select 限界
+        for ev_id, ev in items[:25]:
             label = f"{ev['date']} {ev['start'].strftime('%H:%M')}-{ev['end'].strftime('%H:%M')}"
             desc  = f"#{ev_id} [{ev['grade']}] {ev['title']}"
             options.append(discord.SelectOption(label=label[:100], value=str(ev_id), description=desc[:100]))
-
         if options:
             self.add_item(_EventSelect(options))
             self._has_select = True
@@ -213,12 +210,10 @@ class _ManagePanel(discord.ui.View):
                     return None
         return None
 
-    # --- 削除 ---
     @discord.ui.button(label="🗑️ 削除", style=discord.ButtonStyle.danger, row=1, custom_id="cal:delete")
     async def delete_btn(self, inter: discord.Interaction, _: discord.ui.Button):
         if not self._has_select:
             return await inter.response.send_message("削除対象がありません。まずは予定を作成してください。", ephemeral=True)
-
         ev_id = self._selected_id()
         if ev_id is None:
             return await inter.response.send_message("削除する予定をセレクトから選んでください。", ephemeral=True)
@@ -240,12 +235,10 @@ class _ManagePanel(discord.ui.View):
         con.commit()
         return await inter.response.send_message(f"✅ 予定 [#{ev_id}]「{title}」を削除しました。", ephemeral=True)
 
-    # --- 編集（モーダル） ---
     @discord.ui.button(label="✏️ 編集", style=discord.ButtonStyle.primary, row=1, custom_id="cal:edit")
     async def edit_btn(self, inter: discord.Interaction, _: discord.ui.Button):
         if not self._has_select:
             return await inter.response.send_message("編集対象がありません。まずは予定を作成してください。", ephemeral=True)
-
         ev_id = self._selected_id()
         if ev_id is None:
             return await inter.response.send_message("編集する予定をセレクトから選んでください。", ephemeral=True)
@@ -276,7 +269,6 @@ class _ManagePanel(discord.ui.View):
                     required=False,
                     max_length=200
                 )
-                # フィールドを追加
                 self.add_item(self.t_title)
                 self.add_item(self.t_date)
                 self.add_item(self.t_start)
@@ -290,7 +282,6 @@ class _ManagePanel(discord.ui.View):
                     new_en = _parse_time(self.t_end.value)
                 except Exception:
                     return await m_inter.response.send_message("⚠️ 日付/時刻の形式が不正です。", ephemeral=True)
-
                 if dt.datetime.combine(new_date, new_en) <= dt.datetime.combine(new_date, new_st):
                     return await m_inter.response.send_message("⚠️ 終了は開始より後にしてください。", ephemeral=True)
 
@@ -298,7 +289,6 @@ class _ManagePanel(discord.ui.View):
                 loc_in = (self.t_place.value or "").strip()
                 new_loc_type = loc_type
                 new_loc_detail = loc_detail
-
                 if loc_in:
                     parts = loc_in.split(None, 1)
                     head = parts[0].lower()
@@ -331,16 +321,14 @@ class _ManagePanel(discord.ui.View):
                     f"✅ 予定 [#{ev_id}] を更新しました。`/calendar` を再実行すると反映が見られます。",
                     ephemeral=True
                 )
-
-        # ここで最初の応答としてモーダルを出す
         return await inter.response.send_modal(EditModal())
 
-    # --- 新規登録（モーダル） ---
     @discord.ui.button(label="➕ 新規登録", style=discord.ButtonStyle.success, row=2, custom_id="cal:create")
     async def create_btn(self, inter: discord.Interaction, _: discord.ui.Button):
         class CreateModal(discord.ui.Modal):
             def __init__(self):
                 super().__init__(title="予定を新規登録")
+                # 5項目に収める：学年 / タイトル / 日付 / 時間帯 / 場所
                 self.g_grade = discord.ui.TextInput(
                     label="学年（B3/B4/M/D/researcher/ALL）※空欄は自分の学年",
                     required=False,
@@ -348,23 +336,22 @@ class _ManagePanel(discord.ui.View):
                 )
                 self.t_title = discord.ui.TextInput(label="タイトル", max_length=256)
                 self.t_date  = discord.ui.TextInput(label="日付 (YYYY-MM-DD)", max_length=10)
-                self.t_start = discord.ui.TextInput(label="開始 (HH:MM)", max_length=5)
-                self.t_end   = discord.ui.TextInput(label="終了 (HH:MM)", max_length=5)
+                self.t_range = discord.ui.TextInput(
+                    label="時間帯 (例: 09:00-11:30 / 9:00–11:30 / 9:00～11:30)",
+                    max_length=25
+                )
                 self.t_place = discord.ui.TextInput(
-                    label="場所（online/offline + 任意の詳細） 例: online Zoom / offline 3F-教室",
+                    label="場所（online/offline + 任意の詳細）例: online Zoom / offline 3F-教室",
                     required=False,
                     max_length=200
                 )
-                # フィールドを追加
                 self.add_item(self.g_grade)
                 self.add_item(self.t_title)
                 self.add_item(self.t_date)
-                self.add_item(self.t_start)
-                self.add_item(self.t_end)
+                self.add_item(self.t_range)
                 self.add_item(self.t_place)
 
             async def on_submit(self, m_inter: discord.Interaction):
-                # 学年の正規化＋権限確認
                 target_grade = _normalize_grade_input(self.g_grade.value, m_inter.user)  # type: ignore
                 if target_grade is None:
                     return await m_inter.response.send_message(
@@ -378,12 +365,9 @@ class _ManagePanel(discord.ui.View):
                         f"⛔ { _grade_label(target_grade) } の予定を登録する権限がありません。",
                         ephemeral=True
                     )
-
-                # 入力チェック
                 try:
                     d = _parse_date(self.t_date.value)
-                    t_start = _parse_time(self.t_start.value)
-                    t_end   = _parse_time(self.t_end.value)
+                    t_start, t_end = _parse_time_range(self.t_range.value)
                 except Exception:
                     return await m_inter.response.send_message("⚠️ 日付/時刻の形式が不正です。", ephemeral=True)
                 if dt.datetime.combine(d, t_end) <= dt.datetime.combine(d, t_start):
@@ -441,18 +425,15 @@ class _ManagePanel(discord.ui.View):
                 embed.set_footer(text=f"ID: {ev_id}")
                 await m_inter.response.send_message(embed=embed, ephemeral=True)
 
-        # ★最初の応答としてモーダルを表示
         return await inter.response.send_modal(CreateModal())
-
 
 # 「管理パネルを開く」ボタン付きビュー
 class _OpenManageButton(discord.ui.View):
-    """/calendar のメッセージに付ける「管理パネルを開く」ボタン。押した人にだけ管理UIを出す。"""
     def __init__(self, base: dt.date, end_date: dt.date, target_grade_for_view: str):
         super().__init__(timeout=600)
         self.base = base
         self.end = end_date
-        self.view_grade = target_grade_for_view  # 画面に表示している学年（ALLなら全学年のみ）
+        self.view_grade = target_grade_for_view
 
     @discord.ui.button(label="🛠️ 管理パネルを開く", style=discord.ButtonStyle.secondary, custom_id="cal:openpanel")
     async def open_panel(self, inter: discord.Interaction, button: discord.ui.Button):
@@ -501,12 +482,10 @@ class _OpenManageButton(discord.ui.View):
             msg = "管理できる予定はありません。『➕ 新規登録』から作成できます。"
         await inter.response.send_message(msg, view=panel, ephemeral=True)
 
-
 # ---------- コマンド ----------
 def setup(tree: app_commands.CommandTree, client: discord.Client):
     _ensure_tables()
 
-    # /calendar_registration（既存）
     @tree.command(
         name="calendar_registration",
         description="学年カレンダーに予定を登録（MはM1/M2統合・ALLで全学年向け）。"
@@ -604,7 +583,6 @@ def setup(tree: app_commands.CommandTree, client: discord.Client):
         embed.set_footer(text=f"ID: {ev_id}")
         await inter.followup.send(embed=embed)
 
-    # /calendar（管理ボタン付き）
     @tree.command(
         name="calendar",
         description="自分の学年（または指定学年）のカレンダーを表示（同時に全学年向けも含む）。"
@@ -623,15 +601,12 @@ def setup(tree: app_commands.CommandTree, client: discord.Client):
         from_date: Optional[str] = None,
         grade: Optional[app_commands.Choice[str]] = None,
     ):
-        # 対象学年
         target_grade = grade.value if grade else _user_grade(inter.user)  # type: ignore
         if target_grade is None:
             return await inter.response.send_message(
                 "⚠️ あなたの学年ロールが見つかりませんでした。B3/B4/M1/M2/D/Researcher のいずれかのロールを付与してください。",
                 ephemeral=True,
             )
-
-        # 期間
         try:
             base = _parse_date(from_date) if from_date else _now_tz().date()
         except ValueError:
@@ -648,7 +623,6 @@ def setup(tree: app_commands.CommandTree, client: discord.Client):
                 return await inter.response.send_message("⚠️ days は 1〜62 の範囲で指定してください。", ephemeral=True)
             end_date = base + dt.timedelta(days=days)
 
-        # 取得
         con = get_db()
         cur = con.cursor()
         if target_grade == "ALL":
@@ -673,7 +647,6 @@ def setup(tree: app_commands.CommandTree, client: discord.Client):
             )
         rows = cur.fetchall()
 
-        # 整形
         by_day: Dict[dt.date, List[Tuple[int, dict]]] = {}
         for (ev_id, g, title, s_date, s_start, s_end, loc_type, loc_detail) in rows:
             d = _parse_date(s_date)
@@ -698,7 +671,5 @@ def setup(tree: app_commands.CommandTree, client: discord.Client):
             scope = f"（{_fmt_date(base)} 〜 {_fmt_date(disp_end)}｜全学年含む）"
 
         embed = _embed_event_list(target_grade if target_grade else "ALL", ordered, title_suffix=scope)
-
-        # 管理パネルボタン（押した人にだけephemeral管理UI）
         view = _OpenManageButton(base, end_date, target_grade if target_grade else "ALL")
         await inter.response.send_message(embed=embed, view=view)
