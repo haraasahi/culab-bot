@@ -12,11 +12,14 @@ from discord import app_commands
 
 from ..db import get_db
 
-# タイムゾーン（JST固定。config 未依存）
+# タイムゾーン（JST固定）
 JST = ZoneInfo("Asia/Tokyo")
 
 # 集計対象のタイプ
 WORK_TYPES = ["研究", "勉強", "資料作成", "その他"]
+
+# 画像ファイル名（Embed の attachment:// と一致させる）
+IMG_FILENAME = "week_timeline.png"
 
 
 # ===== Utils =====
@@ -107,19 +110,31 @@ def _load_progress(guild_id: int, user_id: int, day0_ts: int) -> str:
 
 
 def _file_from_img_obj(img_obj) -> Optional[discord.File]:
-    """charts 側の戻り値（path / bytes / PIL.Image）を discord.File に変換。"""
+    """
+    charts 側の戻り値を discord.File に変換。
+    - str（パス）
+    - bytes/bytearray
+    - io.BytesIO（★追加）
+    - PIL.Image（save() を持つもの）
+    """
     try:
         if isinstance(img_obj, str):
-            return discord.File(img_obj, filename="week_timeline.png")
+            return discord.File(img_obj, filename=IMG_FILENAME)
         if isinstance(img_obj, (bytes, bytearray)):
             bio = io.BytesIO(img_obj)
             bio.seek(0)
-            return discord.File(bio, filename="week_timeline.png")
+            return discord.File(bio, filename=IMG_FILENAME)
+        if isinstance(img_obj, io.BytesIO):
+            try:
+                img_obj.seek(0)
+            except Exception:
+                pass
+            return discord.File(img_obj, filename=IMG_FILENAME)
         if hasattr(img_obj, "save"):  # PIL.Image 互換
             bio = io.BytesIO()
             img_obj.save(bio, format="PNG")
             bio.seek(0)
-            return discord.File(bio, filename="week_timeline.png")
+            return discord.File(bio, filename=IMG_FILENAME)
     except Exception:
         return None
     return None
@@ -182,7 +197,7 @@ def _try_build_last7_chart(guild_id: int, user_id: int, start_date: dt.date) -> 
 # ===== Slash Command =====
 def setup(tree: app_commands.CommandTree, client: discord.Client):
 
-    @tree.command(name="log", description="作業ログを見る（『今週』＝直近7日・画像添付）")
+    @tree.command(name="log", description="作業ログを見る（『今週』＝直近7日・画像を同Embedに表示）")
     @app_commands.describe(period="期間を選択（今日 / 今週=直近7日）")
     @app_commands.choices(
         period=[
@@ -251,9 +266,10 @@ def setup(tree: app_commands.CommandTree, client: discord.Client):
             label = f"{d:%m/%d}（{_weekday_jp(d)}）の進捗"
             embed.add_field(name=label, value=content[:1024], inline=False)
 
-        # チャート画像：charts が範囲指定対応なら直近7日を生成、なければ従来週版にフォールバック
+        # チャート画像：Embed 内に表示（attachment://…）
         chart_file = _try_build_last7_chart(guild.id, user.id, start_day)
         if chart_file:
+            embed.set_image(url=f"attachment://{IMG_FILENAME}")
             await inter.followup.send(embed=embed, file=chart_file)
         else:
             await inter.followup.send(embed=embed)
