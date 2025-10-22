@@ -121,7 +121,6 @@ def _normalize_grade_input(s: str | None, member: discord.Member) -> Optional[st
     if not s:
         return _user_grade(member)
     raw = s.strip().lower()
-    # 代表表記へ丸め
     if raw in ("b3",): return "B3"
     if raw in ("b4",): return "B4"
     if raw in ("m", "m1", "m2"): return "M"
@@ -143,7 +142,6 @@ def _embed_event_list(
         if not rows:
             continue
         lines = []
-        # 行に [#ID] を含めて、ID指定の手動操作もしやすくする
         for _id, ev in rows:
             tag = "【全学年】" if ev.get("grade") == "ALL" and grade != "ALL" else ""
             lines.append(
@@ -171,12 +169,10 @@ class _EventSelect(discord.ui.Select):
         )
 
     async def callback(self, inter: discord.Interaction):
-        # 選択状態を保持するため、選んだ value を default=True に更新
         chosen = self.values[0] if self.values else None
         if chosen:
             for opt in self.options:
                 opt.default = (opt.value == chosen)
-        # 無言でACK（見た目は変えずに応答）
         try:
             await inter.response.edit_message(view=self.view)
         except discord.InteractionResponded:
@@ -218,7 +214,7 @@ class _ManagePanel(discord.ui.View):
         return None
 
     # --- 削除 ---
-    @discord.ui.button(label="🗑️ 削除", style=discord.ButtonStyle.danger, row=1)
+    @discord.ui.button(label="🗑️ 削除", style=discord.ButtonStyle.danger, row=1, custom_id="cal:delete")
     async def delete_btn(self, inter: discord.Interaction, _: discord.ui.Button):
         if not self._has_select:
             return await inter.response.send_message("削除対象がありません。まずは予定を作成してください。", ephemeral=True)
@@ -245,7 +241,7 @@ class _ManagePanel(discord.ui.View):
         return await inter.response.send_message(f"✅ 予定 [#{ev_id}]「{title}」を削除しました。", ephemeral=True)
 
     # --- 編集（モーダル） ---
-    @discord.ui.button(label="✏️ 編集", style=discord.ButtonStyle.primary, row=1)
+    @discord.ui.button(label="✏️ 編集", style=discord.ButtonStyle.primary, row=1, custom_id="cal:edit")
     async def edit_btn(self, inter: discord.Interaction, _: discord.ui.Button):
         if not self._has_select:
             return await inter.response.send_message("編集対象がありません。まずは予定を作成してください。", ephemeral=True)
@@ -267,17 +263,25 @@ class _ManagePanel(discord.ui.View):
         if not _can_manage_event(inter.user, ev_grade):  # type: ignore
             return await inter.response.send_message("⛔ この予定を編集する権限がありません。", ephemeral=True)
 
-        class EditModal(discord.ui.Modal, title="予定を編集"):
-            t_title = discord.ui.TextInput(label="タイトル", default=title[:100], max_length=256)
-            t_date  = discord.ui.TextInput(label="日付 (YYYY-MM-DD)", default=date_s, max_length=10)
-            t_start = discord.ui.TextInput(label="開始 (HH:MM)", default=st_s, max_length=5)
-            t_end   = discord.ui.TextInput(label="終了 (HH:MM)", default=en_s, max_length=5)
-            t_place = discord.ui.TextInput(
-                label="場所（online/offline + 任意の詳細）",
-                default=(f"{loc_type} {loc_detail}".strip() if loc_detail else loc_type),
-                required=False,
-                max_length=200
-            )
+        class EditModal(discord.ui.Modal):
+            def __init__(self):
+                super().__init__(title="予定を編集")
+                self.t_title = discord.ui.TextInput(label="タイトル", default=title[:100], max_length=256)
+                self.t_date  = discord.ui.TextInput(label="日付 (YYYY-MM-DD)", default=date_s, max_length=10)
+                self.t_start = discord.ui.TextInput(label="開始 (HH:MM)", default=st_s, max_length=5)
+                self.t_end   = discord.ui.TextInput(label="終了 (HH:MM)", default=en_s, max_length=5)
+                self.t_place = discord.ui.TextInput(
+                    label="場所（online/offline + 任意の詳細）",
+                    default=(f"{loc_type} {loc_detail}".strip() if loc_detail else loc_type),
+                    required=False,
+                    max_length=200
+                )
+                # フィールドを追加
+                self.add_item(self.t_title)
+                self.add_item(self.t_date)
+                self.add_item(self.t_start)
+                self.add_item(self.t_end)
+                self.add_item(self.t_place)
 
             async def on_submit(self, m_inter: discord.Interaction):
                 try:
@@ -328,29 +332,39 @@ class _ManagePanel(discord.ui.View):
                     ephemeral=True
                 )
 
+        # ここで最初の応答としてモーダルを出す
         return await inter.response.send_modal(EditModal())
 
     # --- 新規登録（モーダル） ---
-    @discord.ui.button(label="➕ 新規登録", style=discord.ButtonStyle.success, row=2)
+    @discord.ui.button(label="➕ 新規登録", style=discord.ButtonStyle.success, row=2, custom_id="cal:create")
     async def create_btn(self, inter: discord.Interaction, _: discord.ui.Button):
-        class CreateModal(discord.ui.Modal, title="予定を新規登録"):
-            g_grade = discord.ui.TextInput(
-                label="学年（B3/B4/M/D/researcher/ALL）※空欄は自分の学年",
-                required=False,
-                max_length=20
-            )
-            t_title = discord.ui.TextInput(label="タイトル", max_length=256)
-            t_date  = discord.ui.TextInput(label="日付 (YYYY-MM-DD)", max_length=10)
-            t_start = discord.ui.TextInput(label="開始 (HH:MM)", max_length=5)
-            t_end   = discord.ui.TextInput(label="終了 (HH:MM)", max_length=5)
-            t_place = discord.ui.TextInput(
-                label="場所（online/offline + 任意の詳細） 例: online Zoom / offline 3F-教室",
-                required=False,
-                max_length=200
-            )
+        class CreateModal(discord.ui.Modal):
+            def __init__(self):
+                super().__init__(title="予定を新規登録")
+                self.g_grade = discord.ui.TextInput(
+                    label="学年（B3/B4/M/D/researcher/ALL）※空欄は自分の学年",
+                    required=False,
+                    max_length=20
+                )
+                self.t_title = discord.ui.TextInput(label="タイトル", max_length=256)
+                self.t_date  = discord.ui.TextInput(label="日付 (YYYY-MM-DD)", max_length=10)
+                self.t_start = discord.ui.TextInput(label="開始 (HH:MM)", max_length=5)
+                self.t_end   = discord.ui.TextInput(label="終了 (HH:MM)", max_length=5)
+                self.t_place = discord.ui.TextInput(
+                    label="場所（online/offline + 任意の詳細） 例: online Zoom / offline 3F-教室",
+                    required=False,
+                    max_length=200
+                )
+                # フィールドを追加
+                self.add_item(self.g_grade)
+                self.add_item(self.t_title)
+                self.add_item(self.t_date)
+                self.add_item(self.t_start)
+                self.add_item(self.t_end)
+                self.add_item(self.t_place)
 
             async def on_submit(self, m_inter: discord.Interaction):
-                # 学年の正規化＋権限確認（.value を使う）
+                # 学年の正規化＋権限確認
                 target_grade = _normalize_grade_input(self.g_grade.value, m_inter.user)  # type: ignore
                 if target_grade is None:
                     return await m_inter.response.send_message(
@@ -365,7 +379,7 @@ class _ManagePanel(discord.ui.View):
                         ephemeral=True
                     )
 
-                # 入力チェック（.value を使う）
+                # 入力チェック
                 try:
                     d = _parse_date(self.t_date.value)
                     t_start = _parse_time(self.t_start.value)
@@ -427,14 +441,8 @@ class _ManagePanel(discord.ui.View):
                 embed.set_footer(text=f"ID: {ev_id}")
                 await m_inter.response.send_message(embed=embed, ephemeral=True)
 
-        # モーダル表示（ACK）
-        try:
-            return await inter.response.send_modal(CreateModal())
-        except discord.InteractionResponded:
-            pass
-        except Exception:
-            if not inter.response.is_done():
-                await inter.response.defer(ephemeral=True)
+        # ★最初の応答としてモーダルを表示
+        return await inter.response.send_modal(CreateModal())
 
 
 # 「管理パネルを開く」ボタン付きビュー
@@ -446,9 +454,8 @@ class _OpenManageButton(discord.ui.View):
         self.end = end_date
         self.view_grade = target_grade_for_view  # 画面に表示している学年（ALLなら全学年のみ）
 
-    @discord.ui.button(label="🛠️ 管理パネルを開く", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="🛠️ 管理パネルを開く", style=discord.ButtonStyle.secondary, custom_id="cal:openpanel")
     async def open_panel(self, inter: discord.Interaction, button: discord.ui.Button):
-        # 押したユーザーの権限で、期間内＆表示学年の予定から“管理可能なもの”だけ抽出
         con = get_db()
         cur = con.cursor()
         if self.view_grade == "ALL":
