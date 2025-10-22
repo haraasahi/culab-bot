@@ -281,17 +281,17 @@ class _ManagePanel(discord.ui.View):
 
             async def on_submit(self, m_inter: discord.Interaction):
                 try:
-                    new_date = _parse_date(str(self.t_date))
-                    new_st = _parse_time(str(self.t_start))
-                    new_en = _parse_time(str(self.t_end))
+                    new_date = _parse_date(self.t_date.value)
+                    new_st = _parse_time(self.t_start.value)
+                    new_en = _parse_time(self.t_end.value)
                 except Exception:
                     return await m_inter.response.send_message("⚠️ 日付/時刻の形式が不正です。", ephemeral=True)
 
                 if dt.datetime.combine(new_date, new_en) <= dt.datetime.combine(new_date, new_st):
                     return await m_inter.response.send_message("⚠️ 終了は開始より後にしてください。", ephemeral=True)
 
-                new_title = str(self.t_title).strip() or title
-                loc_in = (str(self.t_place) or "").strip()
+                new_title = (self.t_title.value or title).strip()
+                loc_in = (self.t_place.value or "").strip()
                 new_loc_type = loc_type
                 new_loc_detail = loc_detail
 
@@ -350,8 +350,8 @@ class _ManagePanel(discord.ui.View):
             )
 
             async def on_submit(self, m_inter: discord.Interaction):
-                # 学年の正規化＋権限確認
-                target_grade = _normalize_grade_input(str(self.g_grade), m_inter.user)  # type: ignore
+                # 学年の正規化＋権限確認（.value を使う）
+                target_grade = _normalize_grade_input(self.g_grade.value, m_inter.user)  # type: ignore
                 if target_grade is None:
                     return await m_inter.response.send_message(
                         "⚠️ 学年は B3/B4/M/D/researcher/ALL から指定してください（空欄可）。",
@@ -365,21 +365,21 @@ class _ManagePanel(discord.ui.View):
                         ephemeral=True
                     )
 
-                # 入力チェック
+                # 入力チェック（.value を使う）
                 try:
-                    d = _parse_date(str(self.t_date))
-                    t_start = _parse_time(str(self.t_start))
-                    t_end   = _parse_time(str(self.t_end))
+                    d = _parse_date(self.t_date.value)
+                    t_start = _parse_time(self.t_start.value)
+                    t_end   = _parse_time(self.t_end.value)
                 except Exception:
                     return await m_inter.response.send_message("⚠️ 日付/時刻の形式が不正です。", ephemeral=True)
                 if dt.datetime.combine(d, t_end) <= dt.datetime.combine(d, t_start):
                     return await m_inter.response.send_message("⚠️ 終了時刻は開始より後にしてください。", ephemeral=True)
 
-                title = str(self.t_title).strip()
+                title = (self.t_title.value or "").strip()
                 if not title:
                     return await m_inter.response.send_message("⚠️ タイトルを入力してください。", ephemeral=True)
 
-                loc_in = (str(self.t_place) or "").strip()
+                loc_in = (self.t_place.value or "").strip()
                 loc_type = "offline"
                 loc_detail = None
                 if loc_in:
@@ -427,14 +427,12 @@ class _ManagePanel(discord.ui.View):
                 embed.set_footer(text=f"ID: {ev_id}")
                 await m_inter.response.send_message(embed=embed, ephemeral=True)
 
-        # ★ここが重要（ACK）：モーダルを表示して応答
+        # モーダル表示（ACK）
         try:
             return await inter.response.send_modal(CreateModal())
         except discord.InteractionResponded:
-            # 応答済みなら無視
             pass
         except Exception:
-            # 予備のACK（ほぼ通らない想定）
             if not inter.response.is_done():
                 await inter.response.defer(ephemeral=True)
 
