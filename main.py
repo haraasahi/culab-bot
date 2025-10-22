@@ -3,9 +3,9 @@
 """
 エントリポイント：
 - Discord Client / CommandTree を初期化
-- DB初期化
+- DB初期化（未終了セッションのクローズ含む）
 - コマンド群を登録
-- スケジューラ起動
+- スケジューラ起動（休憩ゆる通知・カレンダー1日前リマインド）
 - 「作業終了」直後のユーザーメッセージを“本日の進捗”として保存
 """
 
@@ -14,17 +14,26 @@ from discord import app_commands
 
 from bot.config import TOKEN, DEV_GUILD_ID
 from bot.db import init_db, close_open_sessions_at_startup
-from bot.utils import now_utc
 from bot.commands import setup_all
 from bot.progress import is_waiting, save_progress
 from bot.utils import now_utc
-from bot.scheduler import start_schedulers
+
+# スケジューラ import（新名 start_schedulers を優先、旧名に後方互換）
+try:
+    from bot.scheduler import start_schedulers  # 新しい実装名
+except ImportError:  # 旧実装名の互換
+    try:
+        from bot.scheduler import setup_schedulers as start_schedulers  # type: ignore
+    except Exception:
+        start_schedulers = None  # type: ignore
 
 
 # ------- Discord Client -------
 intents = discord.Intents.default()
+# 進捗の自動保存に必要
 intents.message_content = True
-intents.members = True 
+# オンボーディング等でメンバー情報が必要な場合は True（開発者ポータル側でも有効化必須）
+intents.members = True
 
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
@@ -45,9 +54,17 @@ async def on_ready():
     except Exception as e:
         print("Command sync error:", e)
 
-    # 休憩アラート/週次レポートなどの自動処理を起動
-    start_schedulers(client)
-    print("✅ schedulers started")
+    # スケジューラ（休憩ゆる通知・カレンダー1日前リマインド 等）
+    try:
+        if callable(start_schedulers):
+            start_schedulers(client)  # type: ignore[misc]
+            print("✅ schedulers started")
+        else:
+            print("⚠️ scheduler not started: start_schedulers is not available")
+    except Exception as e:
+        print("Scheduler start error:", e)
+
+    print(f"✅ Logged in as {client.user} (ID: {client.user.id})")
 
 
 @client.event
@@ -69,7 +86,13 @@ async def on_message(message: discord.Message):
         content = (message.content or "").strip()
         if not content:
             return  # 画像だけ等はスキップ
-        save_progress(gid, uid, content, now_utc())
+        try:
+            save_progress(gid, uid, content, now_utc())
+        except Exception as e:
+            # DBエラー等があっても落ちないようにする
+            print("save_progress error:", e)
+            return
+
         # 返信できない権限でも処理自体は完了させる
         try:
             await message.reply("📝 進捗を保存しました。/log で確認できます。", mention_author=False)
@@ -80,12 +103,16 @@ async def on_message(message: discord.Message):
 def main():
     # DB初期化 & コマンド登録
     init_db()
+    # Bot再起動時に未終了セッションを強制クローズ
     close_open_sessions_at_startup(now_utc())
+
+    # スラッシュコマンド登録
     setup_all(tree, client)
 
     if not TOKEN:
         raise RuntimeError("環境変数 DISCORD_TOKEN が設定されていません。")
 
+    # ログイン
     client.run(TOKEN)
 
 
