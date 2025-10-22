@@ -158,9 +158,21 @@ class _ManagePanel(discord.ui.View):
         self._select = discord.ui.Select(placeholder="編集/削除する予定を選んでください（最大25件）", options=options, min_values=1, max_values=1)
         self.add_item(self._select)
 
-        @self._select.callback
-        async def _on_select(inter: discord.Interaction):
-            await inter.response.defer(ephemeral=True)
+    @self._select.callback
+    async def _on_select(inter: discord.Interaction):
+        try:
+            # いちばん確実：見た目を変えずにメッセージを編集＝ACK
+            await inter.response.edit_message(view=self)
+        except discord.InteractionResponded:
+            # 既に応答済みなら何もしない
+            pass
+        except Exception:
+            # フォールバック：とにかくACKだけする
+            try:
+                if not inter.response.is_done():
+                    await inter.response.defer()
+            except Exception:
+                pass
 
     def selected_id(self) -> Optional[int]:
         try:
