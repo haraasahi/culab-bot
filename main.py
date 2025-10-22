@@ -19,6 +19,8 @@ from bot.commands import setup_all
 from bot.scheduler import setup_schedulers
 from bot.progress import is_waiting, save_progress
 from bot.utils import now_utc
+from bot.scheduler import start_schedulers
+
 
 # ------- Discord Client -------
 intents = discord.Intents.default()
@@ -45,8 +47,8 @@ async def on_ready():
         print("Command sync error:", e)
 
     # 休憩アラート/週次レポートなどの自動処理を起動
-    setup_schedulers(client)
-    print(f"✅ Logged in as {client.user} (ID: {client.user.id})")
+    start_schedulers(client)
+    print("✅ schedulers started")
 
 
 @client.event

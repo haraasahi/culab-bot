@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import datetime as dt
+import calendar
 from zoneinfo import ZoneInfo
-from typing import Optional, Iterable
+from typing import Optional
 
 import discord
 from discord import app_commands
@@ -13,7 +14,7 @@ try:
     from ..db import get_db
 except ImportError:
     from ..db import get_conn as get_db
-    
+
 # タイムゾーン（既存に合わせてJST）
 JST = ZoneInfo("Asia/Tokyo")
 
@@ -39,6 +40,7 @@ GRADE_CHOICES = ["B3", "B4", "M", "D", "researcher", "ALL"]
 def _ensure_tables():
     con = get_db()
     cur = con.cursor()
+    # ベーステーブル
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS calendar_events (
@@ -57,6 +59,13 @@ def _ensure_tables():
         """
     )
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cal_guild_grade_date ON calendar_events(guild_id, grade, date);")
+
+    # 1日前リマインド済みフラグ（後方互換で追加）
+    try:
+        cur.execute("ALTER TABLE calendar_events ADD COLUMN remind1d_sent INTEGER NOT NULL DEFAULT 0;")
+    except Exception:
+        pass  # 既にある場合は無視
+
     con.commit()
 
 
@@ -79,10 +88,7 @@ def _user_grade(member: discord.Member) -> Optional[str]:
     return None
 
 def _can_write_grade(member: discord.Member, target_grade: str) -> bool:
-    """その学年のカレンダーに登録できるか。
-       - 'ALL' はサーバ管理権限（manage_guild or administrator）のみ登録可
-       - それ以外は「自分がその学年ロール」or「管理権限」
-    """
+    """その学年のカレンダーに登録できるか。"""
     if member.guild_permissions.manage_guild or member.guild_permissions.administrator:
         return True
     if target_grade == "ALL":
@@ -103,6 +109,13 @@ def _grade_label(g: str) -> str:
     if g == "ALL":
         return "ALL（全学年）"
     return g
+
+def _add_one_month(d: dt.date) -> dt.date:
+    """d から1ヶ月後の同日（存在しない場合は月末）を返す。"""
+    y = d.year + (1 if d.month == 12 else 0)
+    m = 1 if d.month == 12 else d.month + 1
+    last_day = calendar.monthrange(y, m)[1]
+    return dt.date(y, m, min(d.day, last_day))
 
 
 # ---------- 埋め込み生成 ----------
@@ -127,7 +140,6 @@ def _embed_event_list(
         embed.add_field(name=_fmt_date(day), value="\n".join(lines), inline=False)
     if not embed.fields:
         embed.description = "予定は見つかりませんでした。"
-    # 補足
     if grade != "ALL":
         embed.set_footer(text="注: 「【全学年】」は全学年向けに登録された予定です。")
     return embed
@@ -246,7 +258,7 @@ def setup(tree: app_commands.CommandTree, client: discord.Client):
         description="自分の学年（または指定学年）のカレンダーを表示（同時に全学年向けも含む）。"
     )
     @app_commands.describe(
-        days="表示する日数（既定：14日）",
+        days="表示する日数（未指定なら『1ヶ月後まで』）",
         from_date="起点日（YYYY-MM-DD。未指定なら今日）",
         grade="対象学年（指定しない場合は自分の学年。ALL=全学年の予定のみ）",
     )
@@ -255,7 +267,7 @@ def setup(tree: app_commands.CommandTree, client: discord.Client):
     )
     async def calendar(
         inter: discord.Interaction,
-        days: Optional[int] = 14,
+        days: Optional[int] = None,         # 既定：1ヶ月
         from_date: Optional[str] = None,
         grade: Optional[app_commands.Choice[str]] = None,
     ):
@@ -273,17 +285,22 @@ def setup(tree: app_commands.CommandTree, client: discord.Client):
         except ValueError:
             return await inter.response.send_message("⚠️ from_date は `YYYY-MM-DD` で指定してください。", ephemeral=True)
 
-        days = int(days or 14)
-        if days <= 0 or days > 60:
-            return await inter.response.send_message("⚠️ days は 1〜60 の範囲で指定してください。", ephemeral=True)
-
-        end_date = base + dt.timedelta(days=days)
+        # 未指定なら「1ヶ月後まで」
+        if days is None:
+            end_date = _add_one_month(base)
+        else:
+            try:
+                days = int(days)
+            except Exception:
+                return await inter.response.send_message("⚠️ days は整数で指定してください。", ephemeral=True)
+            if days <= 0 or days > 62:
+                return await inter.response.send_message("⚠️ days は 1〜62 の範囲で指定してください。", ephemeral=True)
+            end_date = base + dt.timedelta(days=days)
 
         # 取得
         con = get_db()
         cur = con.cursor()
         if target_grade == "ALL":
-            # 全学年向けのみ
             cur.execute(
                 """
                 SELECT id, grade, title, date, start_time, end_time, location_type, location_detail
@@ -294,7 +311,6 @@ def setup(tree: app_commands.CommandTree, client: discord.Client):
                 (inter.guild_id, base.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")),
             )
         else:
-            # 指定学年 + 全学年向けを含む
             cur.execute(
                 """
                 SELECT id, grade, title, date, start_time, end_time, location_type, location_detail
@@ -324,6 +340,13 @@ def setup(tree: app_commands.CommandTree, client: discord.Client):
             )
 
         ordered = sorted(by_day.items(), key=lambda kv: kv[0])
-        scope = "（全学年のみ）" if target_grade == "ALL" else f"（{_fmt_date(base)} から {days}日・全学年含む）"
-        embed = _embed_event_list(target_grade, ordered, title_suffix=scope)
+
+        # タイトルの範囲表示は from〜(end-1日)
+        disp_end = end_date - dt.timedelta(days=1)
+        if grade and grade.value == "ALL":
+            scope = f"（{_fmt_date(base)} 〜 {_fmt_date(disp_end)}｜全学年のみ）"
+        else:
+            scope = f"（{_fmt_date(base)} 〜 {_fmt_date(disp_end)}｜全学年含む）"
+
+        embed = _embed_event_list(target_grade if target_grade else "ALL", ordered, title_suffix=scope)
         await inter.response.send_message(embed=embed)
