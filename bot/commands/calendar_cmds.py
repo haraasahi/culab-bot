@@ -389,7 +389,6 @@ class _ManagePanel(discord.ui.View):
                         loc_type = head
                         loc_detail = parts[1].strip() if len(parts) > 1 else None
                     else:
-                        # 先頭が online/offline でない場合は detail のみに入れる（typeは既定 offline）
                         loc_detail = loc_in
 
                 con2 = get_db()
@@ -427,6 +426,17 @@ class _ManagePanel(discord.ui.View):
                 embed.add_field(name="場所", value=place_txt, inline=False)
                 embed.set_footer(text=f"ID: {ev_id}")
                 await m_inter.response.send_message(embed=embed, ephemeral=True)
+
+        # ★ここが重要（ACK）：モーダルを表示して応答
+        try:
+            return await inter.response.send_modal(CreateModal())
+        except discord.InteractionResponded:
+            # 応答済みなら無視
+            pass
+        except Exception:
+            # 予備のACK（ほぼ通らない想定）
+            if not inter.response.is_done():
+                await inter.response.defer(ephemeral=True)
 
 
 # 「管理パネルを開く」ボタン付きビュー
