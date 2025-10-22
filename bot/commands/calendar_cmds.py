@@ -145,46 +145,56 @@ def _embed_event_list(
 
 
 # ---------- 管理用ビュー（押した人専用のephemeralパネルを出す） ----------
-class _ManagePanel(discord.ui.View):
-    """押したユーザーにだけ見える管理パネル（セレクト＋編集/削除ボタン）"""
-    def __init__(self, items: List[Tuple[int, dict]], *, timeout: int = 600):
-        super().__init__(timeout=timeout)
-        # 25件まで（Discord Select の制限）
-        options = []
-        for ev_id, ev in items[:25]:
-            label = f"{ev['date']} {ev['start'].strftime('%H:%M')}-{ev['end'].strftime('%H:%M')}"
-            desc = f"#{ev_id} [{ev['grade']}] {ev['title']}"
-            options.append(discord.SelectOption(label=label[:100], value=str(ev_id), description=desc[:100]))
-        self._select = discord.ui.Select(placeholder="編集/削除する予定を選んでください（最大25件）", options=options, min_values=1, max_values=1)
-        self.add_item(self._select)
 
-    @self._select.callback
-    async def _on_select(inter: discord.Interaction):
+class _EventSelect(discord.ui.Select):
+    """予定を1件選ぶセレクト（選択時は無言ACKだけ行う）"""
+    def __init__(self, options: list[discord.SelectOption]):
+        super().__init__(
+            placeholder="編集/削除する予定を選んでください（最大25件）",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, inter: discord.Interaction):
+        # 無言でACK（見た目は変えずに応答）
         try:
-            # いちばん確実：見た目を変えずにメッセージを編集＝ACK
-            await inter.response.edit_message(view=self)
+            await inter.response.edit_message(view=self.view)
         except discord.InteractionResponded:
-            # 既に応答済みなら何もしない
             pass
         except Exception:
-            # フォールバック：とにかくACKだけする
             try:
                 if not inter.response.is_done():
                     await inter.response.defer()
             except Exception:
                 pass
 
-    def selected_id(self) -> Optional[int]:
-        try:
-            v = self._select.values[0]
-            return int(v)
-        except Exception:
-            return None
 
-    # --- 削除 ---
+class _ManagePanel(discord.ui.View):
+    """押したユーザーにだけ見える管理パネル（セレクト＋編集/削除ボタン）"""
+    def __init__(self, items: list[tuple[int, dict]], *, timeout: int = 600):
+        super().__init__(timeout=timeout)
+        # 25件まで（Discord Select の制限）
+        options: list[discord.SelectOption] = []
+        for ev_id, ev in items[:25]:
+            label = f"{ev['date']} {ev['start'].strftime('%H:%M')}-{ev['end'].strftime('%H:%M')}"
+            desc = f"#{ev_id} [{ev['grade']}] {ev['title']}"
+            options.append(discord.SelectOption(label=label[:100], value=str(ev_id), description=desc[:100]))
+        self.add_item(_EventSelect(options))
+
+    def _selected_id(self) -> int | None:
+        # 子アイテムから現在の選択値を取得
+        for child in self.children:
+            if isinstance(child, _EventSelect) and child.values:
+                try:
+                    return int(child.values[0])
+                except Exception:
+                    return None
+        return None
+
     @discord.ui.button(label="🗑️ 削除", style=discord.ButtonStyle.danger)
-    async def delete_btn(self, inter: discord.Interaction, button: discord.ui.Button):
-        ev_id = self.selected_id()
+    async def delete_btn(self, inter: discord.Interaction, _: discord.ui.Button):
+        ev_id = self._selected_id()
         if ev_id is None:
             return await inter.response.send_message("削除する予定をセレクトから選んでください。", ephemeral=True)
 
@@ -197,7 +207,7 @@ class _ManagePanel(discord.ui.View):
         if not row:
             return await inter.response.send_message("指定の予定が見つかりません。", ephemeral=True)
 
-        ev_grade, title, date_s, st_s, en_s = row
+        ev_grade, title, _, _, _ = row
         if not _can_manage_event(inter.user, ev_grade):  # type: ignore
             return await inter.response.send_message("⛔ この予定を削除する権限がありません。", ephemeral=True)
 
@@ -205,10 +215,9 @@ class _ManagePanel(discord.ui.View):
         con.commit()
         return await inter.response.send_message(f"✅ 予定 [#{ev_id}]「{title}」を削除しました。", ephemeral=True)
 
-    # --- 編集（モーダル） ---
     @discord.ui.button(label="✏️ 編集", style=discord.ButtonStyle.primary)
-    async def edit_btn(self, inter: discord.Interaction, button: discord.ui.Button):
-        ev_id = self.selected_id()
+    async def edit_btn(self, inter: discord.Interaction, _: discord.ui.Button):
+        ev_id = self._selected_id()
         if ev_id is None:
             return await inter.response.send_message("編集する予定をセレクトから選んでください。", ephemeral=True)
 
@@ -230,16 +239,14 @@ class _ManagePanel(discord.ui.View):
             t_date  = discord.ui.TextInput(label="日付 (YYYY-MM-DD)", default=date_s, max_length=10)
             t_start = discord.ui.TextInput(label="開始 (HH:MM)", default=st_s, max_length=5)
             t_end   = discord.ui.TextInput(label="終了 (HH:MM)", default=en_s, max_length=5)
-            # place と detail は1欄にまとめる（例: 'online Zoom' / 'offline 3F-教室'）。空なら既存のまま。
             t_place = discord.ui.TextInput(
-                label="場所（online/offline + 任意の詳細）", 
+                label="場所（online/offline + 任意の詳細）",
                 default=(f"{loc_type} {loc_detail}".strip() if loc_detail else loc_type),
                 required=False,
                 max_length=200
             )
 
             async def on_submit(self, m_inter: discord.Interaction):
-                # 入力を検証
                 try:
                     new_date = _parse_date(str(self.t_date))
                     new_st = _parse_time(str(self.t_start))
@@ -256,14 +263,12 @@ class _ManagePanel(discord.ui.View):
                 new_loc_detail = loc_detail
 
                 if loc_in:
-                    # 先頭トークンのみ online/offline 判定、残りを detail として扱う
                     parts = loc_in.split(None, 1)
                     head = parts[0].lower()
                     if head in ("online", "offline"):
                         new_loc_type = head
                         new_loc_detail = parts[1].strip() if len(parts) > 1 else None
                     else:
-                        # 不明なら既存維持 & detail 全体を補足として反映
                         new_loc_detail = loc_in
 
                 con2 = get_db()
@@ -285,7 +290,10 @@ class _ManagePanel(discord.ui.View):
                     ),
                 )
                 con2.commit()
-                await m_inter.response.send_message(f"✅ 予定 [#{ev_id}] を更新しました。`/calendar` を再実行すると反映が見られます。", ephemeral=True)
+                await m_inter.response.send_message(
+                    f"✅ 予定 [#{ev_id}] を更新しました。`/calendar` を再実行すると反映が見られます。",
+                    ephemeral=True
+                )
 
         return await inter.response.send_modal(EditModal())
 
