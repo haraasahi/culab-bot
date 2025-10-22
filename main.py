@@ -15,7 +15,7 @@ from discord import app_commands
 from bot.config import TOKEN, DEV_GUILD_ID
 from bot.db import init_db, close_open_sessions_at_startup
 from bot.commands import setup_all
-from bot.progress import is_waiting, save_progress
+from bot.progress import consume_waiting, save_progress
 from bot.utils import now_utc
 
 # スケジューラ import（新名 start_schedulers を優先、旧名に後方互換）
@@ -82,16 +82,16 @@ async def on_message(message: discord.Message):
     uid = str(message.author.id)
 
     # 対象ユーザーが「進捗待ち」状態か？
-    if is_waiting(gid, cid, uid):
+
+    if consume_waiting(gid, cid, uid):
         content = (message.content or "").strip()
         if not content:
             return  # 画像だけ等はスキップ
+        save_progress(gid, uid, content, now_utc())
         try:
-            save_progress(gid, uid, content, now_utc())
-        except Exception as e:
-            # DBエラー等があっても落ちないようにする
-            print("save_progress error:", e)
-            return
+            await message.reply("📝 進捗を保存しました。/log で確認できます。", mention_author=False)
+        except Exception:
+            pass
 
         # 返信できない権限でも処理自体は完了させる
         try:
