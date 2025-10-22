@@ -1,3 +1,5 @@
+culab のdiscordサーバー用bot **「culabの秘書」** のgithubです。
+***
 ## 日本語説明
 
 ✅ **基本コマンド**<br>
