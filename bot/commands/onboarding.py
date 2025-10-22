@@ -9,11 +9,10 @@
 - 個人チャンネル名は“入力名をほぼそのまま”（空白→-、危険記号のみ除去）
   ※ APIが弾いた場合のみローマ字スラグに自動フォールバック
 - culab ロールは「閲覧のみ」（read可・send不可）
-- /welcome_post（案内再掲）、/lockdown_categories（既存カテゴリ権限整備）
 
-main.py 側：
+main.py 側の注意:
 - intents.members = True
-- intents.message_content = True（不要なら FalseでもOK。オンにする場合はDevPortalでMessage Content IntentもON）
+- intents.message_content は不要（FalseでOK）
 """
 
 from __future__ import annotations
@@ -188,7 +187,7 @@ async def _ensure_welcome_channel(guild: discord.Guild) -> discord.TextChannel:
 
 async def _reply_ephemeral(inter: discord.Interaction, content: str):
     """
-    #welcome内で操作しても、返信は基本ephemeral（本人にのみ表示）にする。
+    #welcome内で操作しても、返信は基本ephemeral（本人にのみ表示）。
     """
     if inter.response.is_done():
         await inter.followup.send(content, ephemeral=True)
@@ -216,8 +215,9 @@ class GradeSelect(discord.ui.Select):
         )
 
 class NameModal(discord.ui.Modal, title="名前の入力（日本語OK）"):
+    # ※ ラベルは45文字以下
     name = discord.ui.TextInput(
-        label="あなたの名前（ひらがな、またはローマ字で登録ください)",
+        label="あなたの名前（日本語OK）",
         placeholder="名前または通称を入力（後で変更不可）",
         required=True,
         max_length=32,
@@ -320,31 +320,14 @@ class OnboardView(discord.ui.View):
 
 
 # -------------------------
-#  コマンド & リスナー
+#  セットアップ（イベントのみ登録）
 # -------------------------
 def setup(tree: app_commands.CommandTree, client: discord.Client):
-    # 永続ビュー登録
+    # 永続ビュー登録（再起動後もUIが有効）
     try:
         client.add_view(OnboardView())
     except Exception:
         pass
-
-    @tree.command(name="welcome_post", description="#welcome にウェルカム案内を投稿（管理者）")
-    @app_commands.checks.has_permissions(manage_guild=True)
-    async def welcome_post(inter: discord.Interaction):
-        guild = inter.guild
-        if guild is None:
-            return await _reply_ephemeral(inter, "ギルド内で実行してください。")
-        ch = await _ensure_welcome_channel(guild)
-        view = OnboardView()
-        await ch.send(
-            "ようこそ！\n"
-            "1) 下のメニューで **学年** を選択\n"
-            "2) **名前を入力** ボタンであなたの名前を送信（日本語OK）\n"
-            "→ Bot が **学年ロール付与** と **学年カテゴリ内に個人チャンネル作成** を行います。",
-            view=view,
-        )
-        await _reply_ephemeral(inter, f"✅ {ch.mention} に案内を投稿しました。")
 
     # 新規参加時：#welcome に公開案内（DMは使わない）
     @client.event
@@ -359,52 +342,4 @@ def setup(tree: app_commands.CommandTree, client: discord.Client):
             "2) **名前を入力** ボタンであなたの名前を送信（日本語OK）\n"
             "→ Bot が **学年ロール付与** と **学年カテゴリ内に個人チャンネル作成** を行います。",
             view=view,
-        )
-
-    @tree.command(
-        name="lockdown_categories",
-        description="カテゴリ権限を一括設定（@everyone非表示、学年/Registered可視 + culab閲覧のみ）",
-    )
-    @app_commands.checks.has_permissions(administrator=True)
-    async def lockdown_categories(inter: discord.Interaction):
-        guild = inter.guild
-        if guild is None:
-            return await _reply_ephemeral(inter, "ギルド内で実行してください。")
-        reg_role = await _ensure_registered_role(guild)
-        culab = _get_culab_view_role(guild)
-        changed = 0
-
-        # #welcome は公開
-        welcome = await _ensure_welcome_channel(guild)
-        ow = dict(welcome.overwrites)
-        ow[guild.default_role] = discord.PermissionOverwrite(
-            view_channel=True, send_messages=True, read_message_history=True
-        )
-        await welcome.edit(overwrites=ow, reason="onboarding: ensure welcome open")
-
-        # すべてのカテゴリに対して基本整備
-        for cat in guild.categories:
-            new_ow = dict(cat.overwrites)
-            new_ow[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
-
-            grade_role = discord.utils.get(guild.roles, name=cat.name)
-            if grade_role and grade_role.name in GRADE_ROLES:
-                new_ow[grade_role] = discord.PermissionOverwrite(
-                    view_channel=True, send_messages=True, read_message_history=True
-                )
-            elif reg_role:
-                new_ow[reg_role] = discord.PermissionOverwrite(
-                    view_channel=True, send_messages=True, read_message_history=True
-                )
-
-            if culab:
-                new_ow[culab] = discord.PermissionOverwrite(
-                    view_channel=True, read_message_history=True, send_messages=False
-                )
-
-            await cat.edit(overwrites=new_ow, reason="onboarding: lockdown categories")
-            changed += 1
-
-        await _reply_ephemeral(
-            inter, f"🔐 セット完了：{changed} 件のカテゴリを更新（culab は閲覧のみ）。#welcome は公開のままです。"
         )
