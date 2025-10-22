@@ -16,7 +16,6 @@ from bot.config import TOKEN, DEV_GUILD_ID
 from bot.db import init_db, close_open_sessions_at_startup
 from bot.utils import now_utc
 from bot.commands import setup_all
-from bot.scheduler import setup_schedulers
 from bot.progress import is_waiting, save_progress
 from bot.utils import now_utc
 from bot.scheduler import start_schedulers
