@@ -1,6 +1,6 @@
 # bot/charts.py
 import io
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -10,15 +10,12 @@ from .config import WORK_TYPES, JST
 from .db import connect
 
 # ========= 日本語フォント設定（安全版） =========
-# スキャンせず、OSにありそうな日本語フォント名を優先指定。
-# インストール済みのものが自動で選ばれます（macならヒラギノで表示されるはず）。
 JP_FONTS = [
     "Hiragino Sans", "Hiragino Kaku Gothic ProN",  # mac
     "Yu Gothic", "Meiryo",                         # Windows
     "Noto Sans CJK JP", "Noto Sans JP", "IPAexGothic", "TakaoGothic",  # Linux系
     "MS Gothic", "MS PGothic", "Arial Unicode MS",
 ]
-
 rcParams["font.family"] = "sans-serif"
 rcParams["font.sans-serif"] = JP_FONTS + rcParams.get("font.sans-serif", [])
 rcParams["axes.unicode_minus"] = False  # －が豆腐になるのを防ぐ
@@ -79,42 +76,67 @@ def _to_local_hour(ts: int) -> float:
     dt = datetime.fromtimestamp(ts, JST)
     return dt.hour + dt.minute / 60 + dt.second / 3600
 
-# ========= 週間タイムライン（ガント風） =========
-def make_timeline_week(user_id: str, guild_id: str, now_ts: int | None = None) -> io.BytesIO:
-    """今週(月→日)を行ごとに並べ、時間帯ごとの作業タイプ＆休憩を色分けして描画。"""
-    if now_ts is None:
-        now_ts = int(datetime.now(JST).timestamp())
+# ========= 任意期間（start_date から days 日）のタイムライン（ガント風） =========
+def make_timeline_range(
+    user_id: str,
+    guild_id: str,
+    start_date: date | datetime,
+    days: int = 7,
+    title: str | None = None,
+) -> io.BytesIO:
+    """
+    任意の開始日から days 日分（行ごとに1日）のタイムラインを描画。
+    - 休憩はグレー、作業タイプは COLORS で色分け。
+    - start_date は date/datetime どちらでもOK（JST解釈）。
+    """
+    if isinstance(start_date, datetime):
+        sd = start_date.date()
+    else:
+        sd = start_date
 
-    today = datetime.fromtimestamp(now_ts, JST)
-    monday = today - timedelta(days=today.weekday())
-    days = [datetime(monday.year, monday.month, monday.day, tzinfo=JST) + timedelta(days=i) for i in range(7)]
-    day_stamps = [int(d.timestamp()) for d in days]
+    # JST での 0:00 タイムスタンプを起点にする
+    day0 = datetime(sd.year, sd.month, sd.day, 0, 0, 0, tzinfo=JST)
+    day_list = [day0 + timedelta(days=i) for i in range(days)]
+    day_stamps = [int(d.timestamp()) for d in day_list]
+    range_start = day_stamps[0]
+    range_end = day_stamps[-1] + 86400
 
-    # データ取得
+    # データ取得：範囲に重なるセッションのみ
     with connect() as con:
-        rows = con.execute("""
+        rows = con.execute(
+            """
             SELECT id, start_ts, end_ts, break_seconds, work_type
             FROM sessions
-            WHERE user_id=? AND guild_id=? AND status='closed' AND end_ts>=?
+            WHERE user_id=? AND guild_id=? AND status='closed'
+              AND NOT (end_ts <= ? OR start_ts >= ?)
             ORDER BY start_ts
-        """, (user_id, guild_id, day_stamps[0])).fetchall()
+            """,
+            (user_id, guild_id, range_start, range_end),
+        ).fetchall()
 
-        breaks_map = {}
+        breaks_map: dict[int, list[tuple[int, int]]] = {}
         for sid, *_ in rows:
-            br = con.execute("""
+            br = con.execute(
+                """
                 SELECT start_ts, end_ts FROM session_breaks
-                WHERE session_id=? AND end_ts IS NOT NULL ORDER BY start_ts
-            """, (sid,)).fetchall()
+                WHERE session_id=? AND end_ts IS NOT NULL
+                ORDER BY start_ts
+                """,
+                (sid,),
+            ).fetchall()
             breaks_map[sid] = [(s, e) for s, e in br if e is not None]
 
-    fig_h = 1.0 + 0.6 * len(days)
+    # 描画
+    fig_h = 1.0 + 0.6 * len(day_list)
     plt.figure(figsize=(10, fig_h))
     ax = plt.gca()
 
     y_labels, y_pos = [], []
+    # 上から順に start_date → ... → 最終日 の並び
     for idx, day_start in enumerate(day_stamps):
-        day_label = datetime.fromtimestamp(day_start, JST).strftime("%m/%d(%a)")
-        y = len(days) - idx
+        d = datetime.fromtimestamp(day_start, JST)
+        day_label = d.strftime("%m/%d(%a)")
+        y = len(day_list) - idx  # 上から降順で並べる（見やすさ維持）
         y_labels.append(day_label)
         y_pos.append(y)
 
@@ -125,20 +147,20 @@ def make_timeline_week(user_id: str, guild_id: str, now_ts: int | None = None) -
                 continue
             s, e = clipped
 
-            # 休憩を当日に切り出し
+            # 当日の休憩に切り出し
             day_breaks = []
             for b_s, b_e in breaks_map.get(sid, []):
                 bclip = _clip_to_day(b_s, b_e, day_start)
                 if bclip:
                     day_breaks.append(bclip)
 
-            # 作業セグメントをタイプ色で
+            # 作業（タイプ色）
             for ws, we in _split_work_by_breaks(s, e, day_breaks):
                 left = _to_local_hour(ws)
                 width = _to_local_hour(we) - left
                 ax.barh(y, width, left=left, height=0.35, color=COLORS.get(wtype, "#607D8B"))
 
-            # 休憩はグレー
+            # 休憩（グレー）
             for bs, be in day_breaks:
                 left = _to_local_hour(bs)
                 width = _to_local_hour(be) - left
@@ -149,7 +171,13 @@ def make_timeline_week(user_id: str, guild_id: str, now_ts: int | None = None) -
     ax.set_xlim(0, 24)
     ax.set_xticks(range(0, 25, 3))
     ax.set_xlabel("時刻")
-    ax.set_title("今週の作業タイムライン（タイプ別色分け、休憩=グレー）")
+
+    if title is None:
+        t0 = day_list[0].strftime("%Y/%m/%d")
+        t1 = (day_list[-1]).strftime("%Y/%m/%d")
+        title = f"{t0}〜{t1} の作業タイムライン（タイプ別色分け、休憩=グレー）"
+    ax.set_title(title)
+
     ax.grid(axis="x", linestyle=":", alpha=0.6)
 
     # 凡例
@@ -163,6 +191,25 @@ def make_timeline_week(user_id: str, guild_id: str, now_ts: int | None = None) -
     buf.seek(0)
     plt.close()
     return buf
+
+# ========= 週間タイムライン（互換：月→日） =========
+def make_timeline_week(user_id: str, guild_id: str, now_ts: int | None = None) -> io.BytesIO:
+    """
+    互換用：従来どおり「今週（Mon→Sun）」を描画。
+    内部的には make_timeline_range を使う。
+    """
+    if now_ts is None:
+        now_ts = int(datetime.now(JST).timestamp())
+    today = datetime.fromtimestamp(now_ts, JST)
+    monday = today - timedelta(days=today.weekday())
+    monday0 = datetime(monday.year, monday.month, monday.day, 0, 0, 0, tzinfo=JST)
+    return make_timeline_range(
+        user_id=user_id,
+        guild_id=guild_id,
+        start_date=monday0.date(),
+        days=7,
+        title="今週の作業タイムライン（タイプ別色分け、休憩=グレー）",
+    )
 
 # ========= 日次タイムライン =========
 def make_timeline_day(user_id: str, guild_id: str, target_ts: int | None = None) -> io.BytesIO:
