@@ -1,4 +1,7 @@
+# 「culabの秘書」
+
 culab のdiscordサーバー用bot **「culabの秘書」** のgithubです。
+
 ***
 ## 日本語説明
 
