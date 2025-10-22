@@ -24,16 +24,13 @@ culab のdiscordサーバー用bot **「culabの秘書」** のgithubです。
 > 例：`/log_manual 2025-10-20 09:00 11:15 勉強`<br>
 > 休憩なしの手動ログを追加（形式チェック・重複時間の警告あり）
 
-**・** `/calender_registration <date> <start> <end> <title> <mode>` (*detail grade*は自由選択)
-> カレンダーに予定を設定できます<br>
-> *detail, grade* は記入しなくても動きます<br>
-> *garde* を指定しない場合自分の学年の予定として登録されます。*ALL*を指定する場合は全学年共通の予定を入れてください。<br>
-
 **・** `/calender` (*days, from_date, grade* は自由選択)
 > 予定されたカレンダーが見れます<br>
 > *days* は表示する日数です。未指定の場合は一ヶ月後までの予定が表示されます<br>
 > *from_date* は表示の起点日です。未指定の場合は今日以降の予定が表示されます。<br>
-> *garde* は対象学年です。ALL は全学年共通の予定です。<br>
+> *garde* は対象学年です。ALL は全学年共通の予定です。未指定の場合は自分の学年の予定が表示されます。<br>
+>
+> 管理パネルから予定の削除、編集、新規登録を行えます。
 <br>
 
 ✍️ **進捗メモの残し方**<br>
@@ -76,16 +73,13 @@ culab のdiscordサーバー用bot **「culabの秘書」** のgithubです。
 > Example: `/log_manual 2025-10-20 09:00 11:15 勉強`<br>
 > Adds a manual block without breaks (with format validation and overlap warnings)<br>
 
-**・** `/calender_registration` <date> <start> <end> <title> <mode> (*detail, grade* optional)
-> Register an event on the calendar  <br>
-> *detail, grade* are optional  <br>
-> If *grade* is omitted, it registers to your own grade. If you choose *ALL*, please use it for events common to all grades.<br>
-
 **・** `/calender` (*days, from_date, grade* optional)
 > View scheduled calendar items  <br>
 > *days* is the number of days to display. If omitted, it shows up to one month ahead  <br>
 > *from_date* is the start date of the view. If omitted, events from today onward are shown  <br>
-> *grade* is the target grade. *ALL* means events common to all grades<br>
+> *grade* is the target grade. *ALL* means events common to all grades. If no grade is specified, your own grade's schedule will be displayed.<br>
+>
+> You can delete, edit, or add new schedules from the admin panel<br>
 <br>
 
 ✍️ **How to Leave Progress Notes**<br>
