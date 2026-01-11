@@ -12,6 +12,7 @@ import discord
 from discord import app_commands
 import json
 import os
+import subprocess
 
 
 try:
@@ -37,17 +38,13 @@ ROLE_TO_GRADE = {
 GRADE_CHOICES = ["B3", "B4", "M", "D", "researcher", "ALL"]
 
 # JSON Export Path (Relative to where the bot is run, usually workbot/)
-# 
-# [Deployment Note]
-# On GCE, set this path to a directory served by your web server (e.g. Nginx).
-# Example: "/var/www/html/calendar.json"
-# 
-# Local dev: server/bot/workbot -> server/culab-site/public/data/calendar.json
-EXPORT_JSON_PATH = os.getenv("CALENDAR_JSON_PATH", "../../../culab-site/public/data/calendar.json")
+# Git Sync: Save to a folder tracked by git, then push.
+EXPORT_JSON_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "calendar.json")
 
 def _export_json_callback():
-    """Exports calendar_events to a JSON file for the website."""
+    """Exports calendar_events to JSON and pushes to GitHub."""
     try:
+        # 1. Export JSON
         con = get_db()
         cur = con.cursor()
         cur.execute("""
@@ -81,6 +78,21 @@ def _export_json_callback():
         with open(out_path, 'w', encoding='utf-8') as f:
             json.dump(events, f, ensure_ascii=False, indent=2)
         print(f"Exported calendar to {out_path}")
+
+        # 2. Git Push
+        # Assuming the bot runs inside the git repo `workbot`
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        
+        def git_cmd(args):
+            subprocess.run(["git"] + args, cwd=repo_root, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        try:
+            git_cmd(["add", out_path])
+            git_cmd(["commit", "-m", "Auto-update calendar.json from bot"])
+            git_cmd(["push", "origin", "main"])
+            print("Successfully pushed calendar updates to GitHub.")
+        except subprocess.CalledProcessError:
+            print("Git push failed or nothing to commit.")
 
     except Exception as e:
         print(f"Failed to export calendar JSON: {e}")
