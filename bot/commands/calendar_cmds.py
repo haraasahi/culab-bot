@@ -84,15 +84,33 @@ def _export_json_callback():
         repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         
         def git_cmd(args):
-            subprocess.run(["git"] + args, cwd=repo_root, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # Capture output for debugging
+            result = subprocess.run(
+                ["git"] + args, 
+                cwd=repo_root, 
+                capture_output=True, 
+                text=True
+            )
+            if result.returncode != 0:
+                # Ignore "nothing to commit" or "working tree clean" errors
+                if "nothing to commit" in result.stdout or "nothing to commit" in result.stderr:
+                    print(f"Git commit skipped: Nothing to commit.")
+                    return False
+                
+                print(f"Git command failed: git {' '.join(args)}")
+                print(f"Stdout: {result.stdout}")
+                print(f"Stderr: {result.stderr}")
+                raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
+            return True
 
         try:
             git_cmd(["add", out_path])
-            git_cmd(["commit", "-m", "Auto-update calendar.json from bot"])
-            git_cmd(["push", "origin", "main"])
-            print("Successfully pushed calendar updates to GitHub.")
+            # Only push if commit succeeds (returns True)
+            if git_cmd(["commit", "-m", "Auto-update calendar.json from bot"]):
+                git_cmd(["push", "origin", "main"])
+                print("Successfully pushed calendar updates to GitHub.")
         except subprocess.CalledProcessError:
-            print("Git push failed or nothing to commit.")
+            print("Git push sequence failed. Check logs above.")
 
     except Exception as e:
         print(f"Failed to export calendar JSON: {e}")
