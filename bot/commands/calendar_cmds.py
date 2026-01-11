@@ -10,6 +10,9 @@ from typing import Optional, Dict, List, Tuple
 
 import discord
 from discord import app_commands
+import json
+import os
+
 
 try:
     from ..db import get_db
@@ -32,6 +35,56 @@ ROLE_TO_GRADE = {
     "researcher": "researcher",
 }
 GRADE_CHOICES = ["B3", "B4", "M", "D", "researcher", "ALL"]
+
+# JSON Export Path (Relative to where the bot is run, usually workbot/)
+# 
+# [Deployment Note]
+# On GCE, set this path to a directory served by your web server (e.g. Nginx).
+# Example: "/var/www/html/calendar.json"
+# 
+# Local dev: server/bot/workbot -> server/culab-site/public/data/calendar.json
+EXPORT_JSON_PATH = os.getenv("CALENDAR_JSON_PATH", "../../../culab-site/public/data/calendar.json")
+
+def _export_json_callback():
+    """Exports calendar_events to a JSON file for the website."""
+    try:
+        con = get_db()
+        cur = con.cursor()
+        cur.execute("""
+            SELECT id, guild_id, grade, title, date, start_time, end_time, 
+                   location_type, location_detail, created_by, created_at
+            FROM calendar_events
+            ORDER BY date ASC, start_time ASC
+        """)
+        rows = cur.fetchall()
+        
+        events = []
+        for row in rows:
+            events.append({
+                "id": row["id"],
+                "guild_id": str(row["guild_id"]),
+                "grade": row["grade"],
+                "title": row["title"],
+                "date": row["date"],
+                "start_time": row["start_time"],
+                "end_time": row["end_time"],
+                "location_type": row["location_type"],
+                "location_detail": row["location_detail"],
+                "created_by": str(row["created_by"]),
+                "created_at": row["created_at"]
+            })
+
+        # Ensure directory exists
+        out_path = os.path.abspath(EXPORT_JSON_PATH)
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+        with open(out_path, 'w', encoding='utf-8') as f:
+            json.dump(events, f, ensure_ascii=False, indent=2)
+        print(f"Exported calendar to {out_path}")
+
+    except Exception as e:
+        print(f"Failed to export calendar JSON: {e}")
+
 
 # ---------- DB 初期化 ----------
 def _ensure_tables():
@@ -254,6 +307,10 @@ class _ManagePanel(discord.ui.View):
 
         cur.execute("DELETE FROM calendar_events WHERE id=? AND guild_id=?", (ev_id, inter.guild_id))
         con.commit()
+        
+        # Export JSON
+        _export_json_callback()
+        
         return await inter.response.send_message(f"✅ 予定 [#{ev_id}]「{title}」を削除しました。", ephemeral=True)
 
     # --- 編集（モーダル） ---
@@ -343,6 +400,10 @@ class _ManagePanel(discord.ui.View):
                     ),
                 )
                 con2.commit()
+                
+                # Export JSON
+                _export_json_callback()
+                
                 await m_inter.response.send_message(
                     f"✅ 予定 [#{ev_id}] を更新しました。`/calendar` を再実行すると反映が見られます。",
                     ephemeral=True
@@ -446,6 +507,9 @@ class _ManagePanel(discord.ui.View):
                 )
                 con2.commit()
                 ev_id = cur2.lastrowid
+
+                # Export JSON
+                _export_json_callback()
 
                 embed = discord.Embed(
                     title=f"📝 予定を登録しました（{_grade_label(target_grade)}）",
