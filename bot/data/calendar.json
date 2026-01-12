@@ -193,5 +193,18 @@
     "location_detail": null,
     "created_by": "893489163347853352",
     "created_at": "2026-01-12T01:47:00+09:00"
+  },
+  {
+    "id": 18,
+    "guild_id": "1429738110136094795",
+    "grade": "B4",
+    "title": "B4ゼミ",
+    "date": "2026-01-22",
+    "start_time": "15:15",
+    "end_time": "18:00",
+    "location_type": "offline",
+    "location_detail": null,
+    "created_by": "893489163347853352",
+    "created_at": "2026-01-12T17:40:41+09:00"
   }
 ]
